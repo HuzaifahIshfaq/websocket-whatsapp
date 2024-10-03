@@ -8,9 +8,9 @@ import 'message_model.dart';
 import 'socket.dart';
 import 'package:file_picker/file_picker.dart';
 import 'dart:io';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:dio/dio.dart';
 import 'package:video_player/video_player.dart';
+import 'package:chewie/chewie.dart';
 
 class ChatPage extends StatefulWidget {
   final int roomId;
@@ -35,7 +35,8 @@ class _ChatPageState extends State<ChatPage> {
   File? _selectedFile;
   Uint8List? _selectedImageBytes;
   VideoPlayerController? _videoPlayerController;
-  ScrollController _scrollController = ScrollController();
+
+  ChewieController? _chewieController;
 
   @override
   void initState() {
@@ -62,6 +63,12 @@ class _ChatPageState extends State<ChatPage> {
       print("for all $data");
       _updateSeenStatusAll();
     });
+
+    _socketService.DeleteMessageListen((data) {
+      print('message deleted');
+      deleteMessage(data);
+      // updateMessage(data);
+    });
     // _socketService.ListenSeenUpdate((messageid) {
     //   for (var i = 0; i < _messages.length; i++) {
     //     if (_messages[i].messageId == messageid) {
@@ -78,8 +85,8 @@ class _ChatPageState extends State<ChatPage> {
       print('Message received from server cp: $data');
     });
 
-    SocketService().socket.on('listen_seen_update', (data) {
-      print('listen_seen_update  from server cp: $data');
+    SocketService().socket.on('listen_delete_message', (data) {
+      print('listen_delete_message from server cp: $data');
     });
 
     _socketService.onMessages((data) {
@@ -126,7 +133,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _fetchMessages() async {
-    final String getmessage = 'http://192.168.2.106:8000/getmessages';
+    final String getmessage = 'http://192.168.43.65:8000/getmessages';
     try {
       final response = await http.post(
         Uri.parse(getmessage),
@@ -155,7 +162,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<String> uploadFile(String? base64File, String fileType) async {
-    final String uploadUrl = 'http://192.168.2.106:8000/uploadfiles';
+    final String uploadUrl = 'http://192.168.43.65:8000/uploadfiles';
 
     try {
       final Map<String, dynamic> body = {"file": base64File};
@@ -227,7 +234,7 @@ class _ChatPageState extends State<ChatPage> {
           mimeType = 'video/mp4';
           break;
         case 'avi':
-          mimeType = 'video/x-msvideo';
+          mimeType = 'video/mp4';
           break;
         case 'mov':
           mimeType = 'video/quicktime';
@@ -340,6 +347,20 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  void deleteMessage(String messageId) {
+    _socketService.deletemessage(messageId);
+    setState(() {
+      _messages.removeWhere((message) => message.messageId == messageId);
+    });
+    print('Message with id $messageId deleted.');
+  }
+  // void updateMessage(String messageId){
+  //   setState(() {
+  //     _messages.removeWhere((message) => message.messageId == messageId);
+  //   });
+
+  // }
+
   void _downloadFileToDownloadsFolder(Message message) async {
     if (message.data == null || message.data!.isEmpty) {
       print("No file path available");
@@ -348,7 +369,7 @@ class _ChatPageState extends State<ChatPage> {
 
     await _requestPermission();
 
-    final fileUrl = 'http://192.168.2.106:8000/${message.data}';
+    final fileUrl = 'http://192.168.43.65:8000/${message.data}';
     final fileName = message.data!.split('/').last;
 
     try {
@@ -370,21 +391,27 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<VideoPlayerController?> _initializeVideoController(
-      String videoUrl) async {
+  Future<ChewieController?> _initializeChewieController(String videoUrl) async {
     try {
-      print("Video URL: $videoUrl");
-
-      if (_videoPlayerController != null) {
-        _videoPlayerController!.dispose();
-      }
-      _videoPlayerController =
-          VideoPlayerController.networkUrl(Uri.parse(videoUrl));
+      _videoPlayerController = VideoPlayerController.network(videoUrl);
       await _videoPlayerController!.initialize();
-      print("Video player initialized successfully");
-      return _videoPlayerController;
+      _chewieController = ChewieController(
+        videoPlayerController: _videoPlayerController!,
+        autoPlay: false,
+        looping: false,
+        errorBuilder: (context, errorMessage) {
+          return Center(
+            child: Text(
+              errorMessage,
+              style: TextStyle(color: Colors.white),
+            ),
+          );
+        },
+      );
+
+      return _chewieController;
     } catch (e) {
-      print("Error initializing video player: $e");
+      print("Error initializing video player with Chewie: $e");
       return null;
     }
   }
@@ -392,7 +419,7 @@ class _ChatPageState extends State<ChatPage> {
   Widget _buildMessageWidget(Message message) {
     final isSentByMe = message.sender == widget.loggedInUser;
 
-    String baseUrl = 'http://192.168.2.106:8000/';
+    String baseUrl = 'http://192.168.43.65:8000/';
     String fileUrl = "";
     if (message.data != null) {
       fileUrl = baseUrl + message.data;
@@ -448,10 +475,15 @@ class _ChatPageState extends State<ChatPage> {
                   Positioned(
                     bottom: 5,
                     right: 5,
-                    child: IconButton(
-                      icon: Icon(Icons.download,
-                          color: const Color.fromARGB(255, 57, 238, 96)),
-                      onPressed: () => _downloadFileToDownloadsFolder(message),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: Icon(Icons.download,
+                              color: const Color.fromARGB(255, 57, 238, 96)),
+                          onPressed: () =>
+                              _downloadFileToDownloadsFolder(message),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -475,34 +507,25 @@ class _ChatPageState extends State<ChatPage> {
                 ],
               )
             else if (message.type == 'video')
-              FutureBuilder<VideoPlayerController?>(
-                future: _initializeVideoController(fileUrl),
+              FutureBuilder<ChewieController?>(
+                future: _initializeChewieController(fileUrl),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.done) {
                     if (snapshot.hasData && snapshot.data != null) {
-                      VideoPlayerController? videoController = snapshot.data;
+                      ChewieController? chewieController = snapshot.data;
                       return Column(
                         children: [
                           AspectRatio(
-                            aspectRatio: videoController!.value.aspectRatio,
-                            child: VideoPlayer(videoController),
+                            aspectRatio:
+                                _videoPlayerController!.value.aspectRatio,
+                            child: Chewie(controller: chewieController!),
                           ),
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               IconButton(
-                                icon: Icon(
-                                  videoController.value.isPlaying
-                                      ? Icons.pause
-                                      : Icons.play_arrow,
-                                ),
-                                onPressed: () {
-                                  setState(() {
-                                    videoController.value.isPlaying
-                                        ? videoController.pause()
-                                        : videoController.play();
-                                  });
-                                },
+                                icon: Icon(Icons.download),
+                                onPressed: () =>
+                                    _downloadFileToDownloadsFolder(message),
                               ),
                             ],
                           ),
@@ -523,9 +546,13 @@ class _ChatPageState extends State<ChatPage> {
                 },
               )
             else
-              Text(
-                message.message!,
-                style: TextStyle(fontSize: 16.0),
+              Column(
+                children: [
+                  Text(
+                    message.message!,
+                    style: TextStyle(fontSize: 16.0),
+                  ),
+                ],
               ),
             SizedBox(height: 5),
             Row(
@@ -534,6 +561,11 @@ class _ChatPageState extends State<ChatPage> {
                 Text(
                   message.timestamp,
                   style: TextStyle(fontSize: 12.0, color: Colors.grey),
+                ),
+                IconButton(
+                  icon: Icon(Icons.delete,
+                      color: const Color.fromARGB(255, 255, 17, 0)),
+                  onPressed: () => deleteMessage(message.messageId),
                 ),
                 if (isSentByMe) SizedBox(width: 5),
                 if (isSentByMe)
@@ -552,28 +584,12 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(_scrollController
-            .position.maxScrollExtent); // Scrolls to the end immediately.
-        // _scrollController.animateTo(
-        //   _scrollController.position.maxScrollExtent,
-        //   duration: Duration(milliseconds: 300), // Optional: Smooth scroll animation.
-        //   curve: Curves.easeOut,
-        // );
-      }
-    });
-  }
-
   @override
   void dispose() {
-    if (_videoPlayerController != null) {
-      _videoPlayerController!.dispose();
-    }
+    _chewieController?.dispose();
+    _videoPlayerController?.dispose();
     _socketService.receivemessageoff();
     _messageController.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 

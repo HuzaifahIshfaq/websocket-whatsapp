@@ -20,7 +20,7 @@ class _LoginPageState extends State<LoginPage> {
       _isLoading = true;
     });
 
-    final String apiUrl = "http://192.168.2.106:8000/login";
+    final String apiUrl = "http://192.168.43.65:8000/login";
 
     try {
       final response = await http.post(
@@ -37,13 +37,15 @@ class _LoginPageState extends State<LoginPage> {
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
         String username = responseData['data'][0]['username'];
+        int userId = responseData['data'][0]['userId'];
 
         // Save the username
         _saveUsername(username);
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => Chatlist(currentUser: username),
+            builder: (context) =>
+                Chatlist(currentUser: username, userId: userId),
           ),
         );
       } else {

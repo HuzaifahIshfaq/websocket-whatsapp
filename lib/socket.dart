@@ -16,7 +16,7 @@ class SocketService {
   IO.Socket get socket => _socket;
 
   void _connect() {
-    _socket = IO.io('ws://192.168.2.106:8000', <String, dynamic>{
+    _socket = IO.io('ws://192.168.43.65:8000', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
     });
@@ -85,6 +85,19 @@ class SocketService {
       'username': username,
     };
     _socket.emit('update_seen_for_all', data);
+  }
+
+  void deletemessage(String messageid) {
+    print("message deleted from socket $messageid");
+    _socket.emit('delete_message', messageid);
+  }
+
+  void DeleteMessageListen(Function(dynamic) callback) {
+    print('message delete notification received from admin');
+    _socket.on('listen_delete_message', (data) {
+      print('listen received from server: socket $data');
+      callback(data);
+    });
   }
 
   void sendMessage(Map<String, dynamic> data) {

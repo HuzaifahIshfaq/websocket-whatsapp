@@ -3,12 +3,12 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chatpage.dart';
-import 'db_helper.dart';
 
 class Chatlist extends StatefulWidget {
   final String currentUser;
+  final int userId;
 
-  const Chatlist({super.key, required this.currentUser});
+  const Chatlist({super.key, required this.currentUser, required this.userId});
 
   @override
   State<Chatlist> createState() => _ChatlistState();
@@ -28,53 +28,59 @@ class _ChatlistState extends State<Chatlist> {
   }
 
   Future<void> _createRoomAndNavigate() async {
-    List<int> usernam =
-        await DBHelper().searchRoomByUsername(widget.currentUser);
-    print(usernam);
-    if (usernam.length > 0) {
-      int roomId = usernam[0];
-      print(roomId);
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ChatPage(
-            roomId: roomId,
-            loggedInUser: widget.currentUser,
-            partnerUser: "old",
+    final String apii = "http://192.168.43.65:8000/checkroom";
+    try {
+      final response = await http.post(Uri.parse(apii),
+          headers: {
+            'Content-type': 'application/json',
+          },
+          body: jsonEncode({
+            'roomId': widget.userId,
+          }));
+      final responseData = jsonDecode(response.body);
+      print("taggg1 ${responseData}");
+      if (responseData == true)
+        print("Room Exists");
+      else
+        print("New Room");
+      if (response.statusCode == 200) {
+        // final responseData = jsonDecode(response.body);
+        print("taggg $responseData");
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatPage(
+              roomId: widget.userId,
+              loggedInUser: widget.currentUser,
+              partnerUser: "old",
+            ),
           ),
-        ),
-      );
-      return;
-    }
+        );
+        return;
+      }
+    } catch (e) {}
     setState(() {
       _isLoading = true;
     });
 
-    final String roomApiUrl = "http://192.168.2.106:8000/createroom";
+    final String roomApiUrl = "http://192.168.43.65:8000/createroom";
     try {
       final response = await http.post(
         Uri.parse(roomApiUrl),
         headers: {
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({
-          'username': widget.currentUser,
-        }),
+        body: jsonEncode(
+            {'username': widget.currentUser, 'roomId': widget.userId}),
       );
 
       if (response.statusCode == 200) {
-        final responseData = jsonDecode(response.body);
-        final int roomId = responseData['roomId'];
-
-        await DBHelper().insertRoom(roomId, widget.currentUser);
-
-        await _saveRoomId(roomId);
-
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ChatPage(
-              roomId: roomId,
+              roomId: widget.userId,
               loggedInUser: widget.currentUser,
               partnerUser: "new",
             ),
