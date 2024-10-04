@@ -28,7 +28,7 @@ class _ChatlistState extends State<Chatlist> {
   }
 
   Future<void> _createRoomAndNavigate() async {
-    final String apii = "http://192.168.43.65:8000/checkroom";
+    final String apii = "http://192.168.2.106:8000/checkroom";
     try {
       final response = await http.post(Uri.parse(apii),
           headers: {
@@ -64,7 +64,7 @@ class _ChatlistState extends State<Chatlist> {
       _isLoading = true;
     });
 
-    final String roomApiUrl = "http://192.168.43.65:8000/createroom";
+    final String roomApiUrl = "http://192.168.2.106:8000/createroom";
     try {
       final response = await http.post(
         Uri.parse(roomApiUrl),

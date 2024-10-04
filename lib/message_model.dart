@@ -2,7 +2,7 @@ class Message {
   final String messageId;
   final dynamic roomId;
   final String sender;
-  final String? message;
+  String? message;
   bool seen;
   final String timestamp;
   final String? type;
@@ -51,5 +51,9 @@ class Message {
       'name': name,
       'data': data
     };
+  }
+
+  void setMessage(String message) {
+    message = message;
   }
 }

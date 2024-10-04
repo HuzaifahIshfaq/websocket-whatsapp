@@ -20,7 +20,7 @@ class _LoginPageState extends State<LoginPage> {
       _isLoading = true;
     });
 
-    final String apiUrl = "http://192.168.43.65:8000/login";
+    final String apiUrl = "http://192.168.2.106:8000/login";
 
     try {
       final response = await http.post(

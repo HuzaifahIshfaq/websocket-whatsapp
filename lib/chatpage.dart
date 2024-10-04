@@ -35,7 +35,6 @@ class _ChatPageState extends State<ChatPage> {
   File? _selectedFile;
   Uint8List? _selectedImageBytes;
   VideoPlayerController? _videoPlayerController;
-
   ChewieController? _chewieController;
 
   @override
@@ -64,9 +63,9 @@ class _ChatPageState extends State<ChatPage> {
       _updateSeenStatusAll();
     });
 
-    _socketService.DeleteMessageListen((data) {
+    _socketService.DeleteMessageListenForEveryone((data) {
       print('message deleted');
-      deleteMessage(data);
+      deleteForEveryone(data);
       // updateMessage(data);
     });
     // _socketService.ListenSeenUpdate((messageid) {
@@ -133,14 +132,14 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _fetchMessages() async {
-    final String getmessage = 'http://192.168.43.65:8000/getmessages';
+    final String getmessage = 'http://192.168.2.106:8000/getmessages';
     try {
       final response = await http.post(
         Uri.parse(getmessage),
         headers: {
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'roomId': widget.roomId}),
+        body: jsonEncode({'roomId': widget.roomId, 'role': 'user'}),
       );
       if (response.statusCode == 200) {
         final responseData = jsonDecode(response.body);
@@ -162,7 +161,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<String> uploadFile(String? base64File, String fileType) async {
-    final String uploadUrl = 'http://192.168.43.65:8000/uploadfiles';
+    final String uploadUrl = 'http://192.168.2.106:8000/uploadfiles';
 
     try {
       final Map<String, dynamic> body = {"file": base64File};
@@ -347,13 +346,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  void deleteMessage(String messageId) {
-    _socketService.deletemessage(messageId);
-    setState(() {
-      _messages.removeWhere((message) => message.messageId == messageId);
-    });
-    print('Message with id $messageId deleted.');
-  }
   // void updateMessage(String messageId){
   //   setState(() {
   //     _messages.removeWhere((message) => message.messageId == messageId);
@@ -369,7 +361,7 @@ class _ChatPageState extends State<ChatPage> {
 
     await _requestPermission();
 
-    final fileUrl = 'http://192.168.43.65:8000/${message.data}';
+    final fileUrl = 'http://192.168.2.106:8000/${message.data}';
     final fileName = message.data!.split('/').last;
 
     try {
@@ -391,40 +383,113 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<ChewieController?> _initializeChewieController(String videoUrl) async {
-    try {
-      _videoPlayerController = VideoPlayerController.network(videoUrl);
-      await _videoPlayerController!.initialize();
-      _chewieController = ChewieController(
-        videoPlayerController: _videoPlayerController!,
-        autoPlay: false,
-        looping: false,
-        errorBuilder: (context, errorMessage) {
-          return Center(
-            child: Text(
-              errorMessage,
-              style: TextStyle(color: Colors.white),
-            ),
-          );
-        },
-      );
+  Map<String, ChewieController?> _chewieControllers = {};
+  Map<String, VideoPlayerController?> _videoControllers = {};
 
-      return _chewieController;
-    } catch (e) {
-      print("Error initializing video player with Chewie: $e");
-      return null;
+  Future<ChewieController?> _initializeChewieController(
+      String messageId, String videoUrl) async {
+    if (_chewieControllers.containsKey(messageId) &&
+        _chewieControllers[messageId] != null) {
+      return _chewieControllers[messageId];
     }
+
+    VideoPlayerController videoPlayerController =
+        VideoPlayerController.network(videoUrl);
+    await videoPlayerController.initialize();
+
+    ChewieController chewieController = ChewieController(
+      videoPlayerController: videoPlayerController,
+      autoPlay: false,
+      looping: false,
+      errorBuilder: (context, errorMessage) {
+        return Center(
+          child: Text(
+            errorMessage,
+            style: TextStyle(color: Colors.white),
+          ),
+        );
+      },
+    );
+
+    _chewieControllers[messageId] = chewieController;
+    _videoControllers[messageId] = videoPlayerController;
+
+    return chewieController;
+  }
+
+  void deleteMessage(String messageId) {
+    _socketService.deletemessage(messageId);
+
+    setState(() {
+      _messages.removeWhere((message) => message.messageId == messageId);
+    });
+
+    print('Message with id $messageId deleted.');
+  }
+
+  void deleteFromui(String messageId) {
+    _socketService.deletemessageforEveryone(messageId);
+    deleteForEveryone(messageId);
+  }
+
+  void deleteForEveryone(String messageId) {
+    setState(() {
+      Message? message = _findMessageById(messageId);
+      if (message != null) {
+        message.message = "This message was deleted";
+      }
+    });
+
+    print('Message with id $messageId updated to "This message was deleted."');
+  }
+
+  Message? _findMessageById(String messageId) {
+    for (var message in _messages) {
+      if (message.messageId == messageId) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  void showDeleteDialog(BuildContext context, String messageId, bool isSentByMe,
+      Function deleteMessage) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text("Delete Message"),
+          content: Text("Are you sure you want to delete this message?"),
+          actions: <Widget>[
+            // Delete for everyone button
+
+            TextButton(
+              onPressed: () {
+                deleteMessage(messageId); // Update message content
+                Navigator.of(context).pop(); // Close dialog
+              },
+              child: Text('Delete for me'),
+            ),
+            isSentByMe
+                ? TextButton(
+                    onPressed: () {
+                      deleteFromui(messageId); // Update message content
+                      Navigator.of(context).pop();
+                    },
+                    child: Text('Delete for everyone'),
+                  )
+                : Text(''),
+          ],
+        );
+      },
+    );
   }
 
   Widget _buildMessageWidget(Message message) {
     final isSentByMe = message.sender == widget.loggedInUser;
 
-    String baseUrl = 'http://192.168.43.65:8000/';
-    String fileUrl = "";
-    if (message.data != null) {
-      fileUrl = baseUrl + message.data;
-      print(fileUrl);
-    }
+    String baseUrl = 'http://192.168.2.106:8000/';
+    String fileUrl = message.data != null ? baseUrl + message.data : "";
 
     return Align(
       alignment: isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -445,7 +510,15 @@ class _ChatPageState extends State<ChatPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (message.type == 'image')
+            if (message.message == "This message was deleted")
+              Text(
+                "This message was deleted",
+                style: TextStyle(
+                  fontStyle: FontStyle.italic,
+                  color: Colors.grey,
+                ),
+              )
+            else if (message.type == 'image')
               Stack(
                 children: [
                   Image.network(
@@ -475,15 +548,10 @@ class _ChatPageState extends State<ChatPage> {
                   Positioned(
                     bottom: 5,
                     right: 5,
-                    child: Row(
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.download,
-                              color: const Color.fromARGB(255, 57, 238, 96)),
-                          onPressed: () =>
-                              _downloadFileToDownloadsFolder(message),
-                        ),
-                      ],
+                    child: IconButton(
+                      icon: Icon(Icons.download,
+                          color: const Color.fromARGB(255, 57, 238, 96)),
+                      onPressed: () => _downloadFileToDownloadsFolder(message),
                     ),
                   ),
                 ],
@@ -508,7 +576,7 @@ class _ChatPageState extends State<ChatPage> {
               )
             else if (message.type == 'video')
               FutureBuilder<ChewieController?>(
-                future: _initializeChewieController(fileUrl),
+                future: _initializeChewieController(message.messageId, fileUrl),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.done) {
                     if (snapshot.hasData && snapshot.data != null) {
@@ -516,18 +584,15 @@ class _ChatPageState extends State<ChatPage> {
                       return Column(
                         children: [
                           AspectRatio(
-                            aspectRatio:
-                                _videoPlayerController!.value.aspectRatio,
+                            aspectRatio: _videoControllers[message.messageId]!
+                                .value
+                                .aspectRatio,
                             child: Chewie(controller: chewieController!),
                           ),
-                          Row(
-                            children: [
-                              IconButton(
-                                icon: Icon(Icons.download),
-                                onPressed: () =>
-                                    _downloadFileToDownloadsFolder(message),
-                              ),
-                            ],
+                          IconButton(
+                            icon: Icon(Icons.download),
+                            onPressed: () =>
+                                _downloadFileToDownloadsFolder(message),
                           ),
                         ],
                       );
@@ -546,13 +611,9 @@ class _ChatPageState extends State<ChatPage> {
                 },
               )
             else
-              Column(
-                children: [
-                  Text(
-                    message.message!,
-                    style: TextStyle(fontSize: 16.0),
-                  ),
-                ],
+              Text(
+                message.message!,
+                style: TextStyle(fontSize: 16.0),
               ),
             SizedBox(height: 5),
             Row(
@@ -565,7 +626,10 @@ class _ChatPageState extends State<ChatPage> {
                 IconButton(
                   icon: Icon(Icons.delete,
                       color: const Color.fromARGB(255, 255, 17, 0)),
-                  onPressed: () => deleteMessage(message.messageId),
+                  onPressed: () {
+                    showDeleteDialog(
+                        context, message.messageId, isSentByMe, deleteMessage);
+                  },
                 ),
                 if (isSentByMe) SizedBox(width: 5),
                 if (isSentByMe)
@@ -586,8 +650,13 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
-    _chewieController?.dispose();
-    _videoPlayerController?.dispose();
+    _chewieControllers.forEach((key, controller) {
+      controller?.dispose();
+    });
+
+    _videoControllers.forEach((key, controller) {
+      controller?.dispose();
+    });
     _socketService.receivemessageoff();
     _messageController.dispose();
     super.dispose();
