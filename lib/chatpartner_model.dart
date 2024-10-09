@@ -9,7 +9,6 @@ class ChatPartner {
     required this.roomId,
   });
 
-  // JSON serialization
   Map<String, dynamic> toJson() {
     return {
       'currentUser': currentUser,
@@ -18,7 +17,6 @@ class ChatPartner {
     };
   }
 
-  // JSON deserialization
   factory ChatPartner.fromJson(Map<String, dynamic> json) {
     return ChatPartner(
       currentUser: json['currentUser'],

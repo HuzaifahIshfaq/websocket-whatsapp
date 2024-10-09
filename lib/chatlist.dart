@@ -44,7 +44,6 @@ class _ChatlistState extends State<Chatlist> {
       else
         print("New Room");
       if (response.statusCode == 200) {
-        // final responseData = jsonDecode(response.body);
         print("taggg $responseData");
 
         Navigator.push(

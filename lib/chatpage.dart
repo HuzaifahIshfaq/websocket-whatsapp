@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -11,6 +10,10 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+
+import 'package:intl/intl.dart';
 
 class ChatPage extends StatefulWidget {
   final int roomId;
@@ -33,13 +36,24 @@ class _ChatPageState extends State<ChatPage> {
   List<Message> _messages = [];
   late SocketService _socketService;
   File? _selectedFile;
-  Uint8List? _selectedImageBytes;
-  VideoPlayerController? _videoPlayerController;
-  ChewieController? _chewieController;
+  AudioPlayer globalAudioPlayer = AudioPlayer();
+  bool isAnyAudioPlaying = false;
+  FlutterSoundRecorder _audioRecorder = FlutterSoundRecorder();
+  bool _isRecording = false;
+  String? _recordedAudioPath;
+  String? _currentAudioFile;
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$minutes:$seconds";
+  }
 
   @override
   void initState() {
     super.initState();
+    _openRecorder();
 
     _socketService = SocketService();
 
@@ -51,7 +65,6 @@ class _ChatPageState extends State<ChatPage> {
       _fetchMessages();
       _socketService.updateseenforall(widget.roomId, widget.loggedInUser);
     }
-    //_socketService.getRoomId();
 
     _socketService.ListenSeenUpdate((message) {
       print(message);
@@ -66,19 +79,8 @@ class _ChatPageState extends State<ChatPage> {
     _socketService.DeleteMessageListenForEveryone((data) {
       print('message deleted');
       deleteForEveryone(data);
-      // updateMessage(data);
     });
-    // _socketService.ListenSeenUpdate((messageid) {
-    //   for (var i = 0; i < _messages.length; i++) {
-    //     if (_messages[i].messageId == messageid) {
-    //       print("TAG1");
-    //       print(_messages[i].message);
-    //       //messages[i].seen = true;
-    //       print("TAG2");
-    //       break;
-    //     }
-    //   }
-    // });
+
     print(SocketService().socket.id);
     SocketService().socket.on('receive_message', (data) {
       print('Message received from server cp: $data');
@@ -174,7 +176,7 @@ class _ChatPageState extends State<ChatPage> {
       );
 
       if (response.statusCode == 200) {
-        print(response.body);
+        print("audioooo ${response.body}");
         final Map<String, dynamic> jsonResponse = jsonDecode(response.body);
         String filePath = jsonResponse['filePath'];
         return filePath;
@@ -197,8 +199,6 @@ class _ChatPageState extends State<ChatPage> {
       final file = File(filePath);
       final fileBytes = await file.readAsBytes();
       final base64FileData = base64Encode(fileBytes);
-
-      final fileName = result.files.single.name;
 
       final fileExtension = filePath.split('.').last.toLowerCase();
       String mimeType;
@@ -241,6 +241,9 @@ class _ChatPageState extends State<ChatPage> {
         case 'mkv':
           mimeType = 'video/x-matroska';
           break;
+        case 'mp3':
+          mimeType = 'video/mp3';
+          break;
         default:
           mimeType = 'application/octet-stream';
           break;
@@ -256,7 +259,6 @@ class _ChatPageState extends State<ChatPage> {
       ].contains(fileExtension)) {
         setState(() {
           _selectedFile = file;
-          _selectedImageBytes = fileBytes;
         });
         _sendMessage(isFile: true, base64Data: base64File, fileType: 'image');
       } else if ([
@@ -269,6 +271,13 @@ class _ChatPageState extends State<ChatPage> {
           _selectedFile = file;
         });
         _sendMessage(isFile: true, base64Data: base64File, fileType: 'video');
+      } else if ([
+        'mp3',
+      ].contains(fileExtension)) {
+        setState(() {
+          _selectedFile = file;
+        });
+        _sendMessage(isFile: true, base64Data: base64File, fileType: 'audio');
       } else {
         setState(() {
           _selectedFile = file;
@@ -285,27 +294,40 @@ class _ChatPageState extends State<ChatPage> {
     String fileType = 'text',
   }) async {
     String messageText = _messageController.text;
-    String timestamp = DateTime.now().toString();
+    String timestamp = TimestampUtil.getCurrentTimestamp().toString();
+    String time = DateTime.now().toString();
 
-    if (isFile && _selectedFile != null) {
-      String path = await uploadFile(base64Data, fileType);
-      final filePath = _selectedFile!.path;
-      final messageType = fileType;
+    if (isFile) {
+      String? path;
+      String messageType;
 
+      if (fileType == 'audio' && base64Data != null) {
+        path = await uploadFile(base64Data, 'audio');
+        messageType = 'audio';
+      } else if (_selectedFile != null) {
+        path = await uploadFile(base64Data, fileType);
+        messageType = fileType;
+      } else {
+        return;
+      }
+
+      final filePath = _selectedFile?.path ?? _recordedAudioPath;
       final fileMessage = Message(
-        messageId: timestamp,
+        messageId: time,
         roomId: widget.roomId,
         sender: widget.loggedInUser,
-        message: fileType == 'image'
+        message: messageType == 'image'
             ? 'Image selected'
-            : fileType == 'video'
+            : messageType == 'video'
                 ? 'Video selected'
-                : 'File selected: ${filePath.split('/').last}',
+                : messageType == 'audio'
+                    ? 'Audio file selected: ${filePath?.split('/').last}'
+                    : 'File selected: ${filePath?.split('/').last}',
         timestamp: timestamp,
         seen: false,
         type: messageType,
-        fileType: filePath.split('.').last,
-        name: filePath.split('/').last,
+        fileType: filePath?.split('.').last,
+        name: filePath?.split('/').last,
         data: path,
       );
 
@@ -314,11 +336,11 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         _messages.add(fileMessage);
         _selectedFile = null;
-        _selectedImageBytes = null;
+        _recordedAudioPath = null;
       });
     } else if (messageText.isNotEmpty) {
       final textMessage = Message(
-        messageId: timestamp,
+        messageId: time,
         roomId: widget.roomId,
         sender: widget.loggedInUser,
         message: messageText,
@@ -345,13 +367,6 @@ class _ChatPageState extends State<ChatPage> {
       print("Permission granted");
     }
   }
-
-  // void updateMessage(String messageId){
-  //   setState(() {
-  //     _messages.removeWhere((message) => message.messageId == messageId);
-  //   });
-
-  // }
 
   void _downloadFileToDownloadsFolder(Message message) async {
     if (message.data == null || message.data!.isEmpty) {
@@ -461,19 +476,17 @@ class _ChatPageState extends State<ChatPage> {
           title: Text("Delete Message"),
           content: Text("Are you sure you want to delete this message?"),
           actions: <Widget>[
-            // Delete for everyone button
-
             TextButton(
               onPressed: () {
-                deleteMessage(messageId); // Update message content
-                Navigator.of(context).pop(); // Close dialog
+                deleteMessage(messageId);
+                Navigator.of(context).pop();
               },
               child: Text('Delete for me'),
             ),
             isSentByMe
                 ? TextButton(
                     onPressed: () {
-                      deleteFromui(messageId); // Update message content
+                      deleteFromui(messageId);
                       Navigator.of(context).pop();
                     },
                     child: Text('Delete for everyone'),
@@ -485,6 +498,88 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  Future<void> _requestMicrophonePermission() async {
+    var status = await Permission.microphone.status;
+    if (!status.isGranted) {
+      await Permission.microphone.request();
+    }
+  }
+
+  Future<void> _openRecorder() async {
+    await _audioRecorder.openRecorder();
+  }
+
+  Future<void> startRecording() async {
+    if (_isRecording) {
+      print("Recording is already in progress");
+      return;
+    }
+
+    var status = await Permission.microphone.request();
+    if (status.isGranted) {
+      Directory tempDir = await getTemporaryDirectory();
+      _recordedAudioPath = '${tempDir.path}/audio_message.aac';
+
+      try {
+        await _audioRecorder.startRecorder(
+          toFile: _recordedAudioPath,
+          codec: Codec.aacADTS,
+        );
+        setState(() {
+          _isRecording = true;
+        });
+        print("Recording started");
+      } catch (e) {
+        print("Error starting recording: $e");
+      }
+    } else {
+      print("Microphone permission not granted");
+    }
+  }
+
+  Future<void> stopRecording() async {
+    if (!_isRecording) {
+      print("No recording in progress");
+      return;
+    }
+
+    try {
+      await _audioRecorder.stopRecorder();
+    } catch (e) {
+      print("Error stopping recording: $e");
+      return;
+    }
+
+    File audioFile = File(_recordedAudioPath!);
+    if (!await audioFile.exists()) {
+      print(
+          "Audio file does not exist at the specified path: $_recordedAudioPath");
+      return;
+    }
+
+    try {
+      List<int> audioBytes = await audioFile.readAsBytes();
+      String base64Audio = base64Encode(audioBytes);
+
+      String base64AudioWithPrefix = 'data:audio/aac;base64,$base64Audio';
+
+      print("Audio bytes length: ${audioBytes.length}");
+      print("Base64 audio length: ${base64Audio.length}");
+
+      _sendMessage(
+          isFile: true, base64Data: base64AudioWithPrefix, fileType: 'audio');
+
+      setState(() {
+        _isRecording = false;
+        _recordedAudioPath = null;
+      });
+
+      print("Recording stopped and audio sent");
+    } catch (e) {
+      print("Error converting audio to Base64: $e");
+    }
+  }
+
   Widget _buildMessageWidget(Message message) {
     final isSentByMe = message.sender == widget.loggedInUser;
 
@@ -492,171 +587,282 @@ class _ChatPageState extends State<ChatPage> {
     String fileUrl = message.data != null ? baseUrl + message.data : "";
 
     return Align(
-      alignment: isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        padding: EdgeInsets.symmetric(vertical: 10.0, horizontal: 14.0),
-        margin: EdgeInsets.symmetric(vertical: 5.0, horizontal: 8.0),
-        decoration: BoxDecoration(
-          color: isSentByMe
-              ? Color.fromARGB(255, 108, 224, 118)
-              : Colors.grey[200],
-          borderRadius: BorderRadius.only(
-            topLeft: Radius.circular(10),
-            topRight: Radius.circular(10),
-            bottomLeft: isSentByMe ? Radius.circular(10) : Radius.zero,
-            bottomRight: isSentByMe ? Radius.zero : Radius.circular(10),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (message.message == "This message was deleted")
-              Text(
-                "This message was deleted",
-                style: TextStyle(
-                  fontStyle: FontStyle.italic,
-                  color: Colors.grey,
-                ),
-              )
-            else if (message.type == 'image')
-              Stack(
-                children: [
-                  Image.network(
-                    fileUrl,
-                    width: 200,
-                    height: 200,
-                    fit: BoxFit.cover,
-                    loadingBuilder: (BuildContext context, Widget child,
-                        ImageChunkEvent? loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return Center(
-                        child: CircularProgressIndicator(
-                          value: loadingProgress.expectedTotalBytes != null
-                              ? loadingProgress.cumulativeBytesLoaded /
-                                  (loadingProgress.expectedTotalBytes ?? 1)
-                              : null,
-                        ),
-                      );
-                    },
-                    errorBuilder: (BuildContext context, Object error,
-                        StackTrace? stackTrace) {
-                      return Center(
-                        child: Text('Failed to load image'),
-                      );
-                    },
-                  ),
-                  Positioned(
-                    bottom: 5,
-                    right: 5,
-                    child: IconButton(
-                      icon: Icon(Icons.download,
-                          color: const Color.fromARGB(255, 57, 238, 96)),
-                      onPressed: () => _downloadFileToDownloadsFolder(message),
+        alignment: isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: GestureDetector(
+          onLongPress: () {
+            showDeleteDialog(
+                context, message.messageId, isSentByMe, deleteMessage);
+          },
+          child: Container(
+            padding: EdgeInsets.symmetric(vertical: 10.0, horizontal: 14.0),
+            margin: EdgeInsets.symmetric(vertical: 5.0, horizontal: 8.0),
+            decoration: BoxDecoration(
+              color: isSentByMe
+                  ? Color.fromARGB(255, 108, 224, 118)
+                  : Colors.grey[200],
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(10),
+                topRight: Radius.circular(10),
+                bottomLeft: isSentByMe ? Radius.circular(10) : Radius.zero,
+                bottomRight: isSentByMe ? Radius.zero : Radius.circular(10),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (message.message == "This message was deleted")
+                  Text(
+                    "This message was deleted",
+                    style: TextStyle(
+                      fontStyle: FontStyle.italic,
+                      color: Colors.grey,
                     ),
-                  ),
-                ],
-              )
-            else if (message.type == 'document' || message.type == 'file')
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'File: ${message.name}',
-                      style: TextStyle(
+                  )
+                else if (message.type == 'image')
+                  Stack(
+                    children: [
+                      Image.network(
+                        fileUrl,
+                        width: 200,
+                        height: 200,
+                        fit: BoxFit.cover,
+                        loadingBuilder: (BuildContext context, Widget child,
+                            ImageChunkEvent? loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return Center(
+                            child: CircularProgressIndicator(
+                              value: loadingProgress.expectedTotalBytes != null
+                                  ? loadingProgress.cumulativeBytesLoaded /
+                                      (loadingProgress.expectedTotalBytes ?? 1)
+                                  : null,
+                            ),
+                          );
+                        },
+                        errorBuilder: (BuildContext context, Object error,
+                            StackTrace? stackTrace) {
+                          return Center(
+                            child: Text('Failed to load image'),
+                          );
+                        },
+                      ),
+                      Positioned(
+                        bottom: 5,
+                        right: 5,
+                        child: IconButton(
+                          icon: Icon(Icons.download,
+                              color: const Color.fromARGB(255, 57, 238, 96)),
+                          onPressed: () =>
+                              _downloadFileToDownloadsFolder(message),
+                        ),
+                      ),
+                    ],
+                  )
+                else if (message.type == 'document' || message.type == 'file')
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'File: ${message.name}',
+                          style: TextStyle(
+                              fontSize: 16.0,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.download),
+                        onPressed: () =>
+                            _downloadFileToDownloadsFolder(message),
+                      ),
+                    ],
+                  )
+                else if (message.type == 'video')
+                  FutureBuilder<ChewieController?>(
+                    future:
+                        _initializeChewieController(message.messageId, fileUrl),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done) {
+                        if (snapshot.hasData && snapshot.data != null) {
+                          ChewieController? chewieController = snapshot.data;
+                          return Column(
+                            children: [
+                              AspectRatio(
+                                aspectRatio:
+                                    _videoControllers[message.messageId]!
+                                        .value
+                                        .aspectRatio,
+                                child: Chewie(controller: chewieController!),
+                              ),
+                              IconButton(
+                                icon: Icon(Icons.download),
+                                onPressed: () =>
+                                    _downloadFileToDownloadsFolder(message),
+                              ),
+                            ],
+                          );
+                        } else {
+                          return Center(
+                            child: Text('Failed to load video'),
+                          );
+                        }
+                      } else if (snapshot.hasError) {
+                        return Center(
+                          child: Text('Error loading video: ${snapshot.error}'),
+                        );
+                      } else {
+                        return Center(child: CircularProgressIndicator());
+                      }
+                    },
+                  )
+                else if (message.type == 'audio')
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Audio ',
+                        style: TextStyle(
                           fontSize: 16.0,
                           fontWeight: FontWeight.bold,
-                          color: Colors.blue),
-                    ),
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.download),
-                    onPressed: () => _downloadFileToDownloadsFolder(message),
-                  ),
-                ],
-              )
-            else if (message.type == 'video')
-              FutureBuilder<ChewieController?>(
-                future: _initializeChewieController(message.messageId, fileUrl),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.done) {
-                    if (snapshot.hasData && snapshot.data != null) {
-                      ChewieController? chewieController = snapshot.data;
-                      return Column(
+                        ),
+                      ),
+                      Row(
                         children: [
-                          AspectRatio(
-                            aspectRatio: _videoControllers[message.messageId]!
-                                .value
-                                .aspectRatio,
-                            child: Chewie(controller: chewieController!),
-                          ),
                           IconButton(
-                            icon: Icon(Icons.download),
-                            onPressed: () =>
-                                _downloadFileToDownloadsFolder(message),
+                            icon: Icon(
+                                _isPlaying && _currentAudioFile == fileUrl
+                                    ? Icons.pause
+                                    : Icons.play_arrow),
+                            onPressed: () => _playPauseAudio(fileUrl),
                           ),
+                          Expanded(
+                            child: Slider(
+                              min: 0.0,
+                              max: _audioDuration.inSeconds.toDouble(),
+                              value: _audioPosition.inSeconds.toDouble().clamp(
+                                  0.0, _audioDuration.inSeconds.toDouble()),
+                              onChanged: (value) async {
+                                await _audioPlayer
+                                    .seek(Duration(seconds: value.toInt()));
+                              },
+                            ),
+                          ),
+                          Text(
+                              "${_audioPosition.inMinutes}:${(_audioPosition.inSeconds % 60).toString().padLeft(2, '0')}/${_audioDuration.inMinutes}:${(_audioDuration.inSeconds % 60).toString().padLeft(2, '0')}"),
                         ],
-                      );
-                    } else {
-                      return Center(
-                        child: Text('Failed to load video'),
-                      );
-                    }
-                  } else if (snapshot.hasError) {
-                    return Center(
-                      child: Text('Error loading video: ${snapshot.error}'),
-                    );
-                  } else {
-                    return Center(child: CircularProgressIndicator());
-                  }
-                },
-              )
-            else
-              Text(
-                message.message!,
-                style: TextStyle(fontSize: 16.0),
-              ),
-            SizedBox(height: 5),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  message.timestamp,
-                  style: TextStyle(fontSize: 12.0, color: Colors.grey),
-                ),
-                IconButton(
-                  icon: Icon(Icons.delete,
-                      color: const Color.fromARGB(255, 255, 17, 0)),
-                  onPressed: () {
-                    showDeleteDialog(
-                        context, message.messageId, isSentByMe, deleteMessage);
-                  },
-                ),
-                if (isSentByMe) SizedBox(width: 5),
-                if (isSentByMe)
-                  Icon(
-                    message.seen
-                        ? Icons.check_circle
-                        : Icons.check_circle_outline,
-                    size: 16,
-                    color: message.seen ? Colors.blue : Colors.grey,
+                      ),
+                    ],
+                  )
+                else
+                  Text(
+                    message.message!,
+                    style: TextStyle(fontSize: 16.0),
                   ),
+                SizedBox(height: 5),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      message.timestamp,
+                      style: TextStyle(fontSize: 12.0, color: Colors.grey),
+                    ),
+                    if (isSentByMe) SizedBox(width: 5),
+                    if (isSentByMe)
+                      Icon(
+                        message.seen
+                            ? Icons.check_circle
+                            : Icons.check_circle_outline,
+                        size: 16,
+                        color: message.seen ? Colors.blue : Colors.grey,
+                      ),
+                  ],
+                ),
               ],
             ),
-          ],
-        ),
-      ),
-    );
+          ),
+        ));
   }
 
+  Future<void> _requestPermissionsAudio() async {}
+
+  AudioPlayer _audioPlayer = AudioPlayer();
+  Duration _audioDuration = Duration.zero;
+  Duration _audioPosition = Duration.zero;
+  bool _isPlaying = false;
+
+  void _initAudioPlayer() {
+    globalAudioPlayer.onDurationChanged.listen((Duration duration) {
+      setState(() {
+        _audioDuration = duration;
+      });
+    });
+
+    globalAudioPlayer.onPositionChanged.listen((Duration position) {
+      setState(() {
+        _audioPosition = position;
+      });
+    });
+
+    globalAudioPlayer.onPlayerComplete.listen((_) {
+      setState(() {
+        _isPlaying = false;
+        _audioPosition = Duration.zero;
+      });
+    });
+  }
+
+  void _playPauseAudio(String fileUrl) async {
+    print("Requested to play: $fileUrl");
+
+    if (_isPlaying && _currentAudioFile == fileUrl) {
+      await _audioPlayer.pause();
+      setState(() {
+        _isPlaying = false;
+      });
+      print("Audio paused");
+    } else {
+      if (_isPlaying && _currentAudioFile != fileUrl) {
+        await _audioPlayer.stop();
+        print("Audio stopped");
+      }
+      Source source;
+      if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+        source = UrlSource(fileUrl);
+        print("Using UrlSource for remote playback");
+      } else {
+        source = File(fileUrl) as Source;
+        print("Using File for local playback");
+      }
+
+      try {
+        await _audioPlayer.play(source);
+        setState(() {
+          _isPlaying = true;
+          _currentAudioFile = fileUrl;
+        });
+        print("Playback started");
+      } catch (e) {
+        print("Error during playback: $e");
+      }
+    }
+  }
+
+  void _seekAudio(double value) async {
+    final position = Duration(seconds: value.toInt());
+    await globalAudioPlayer.seek(position);
+  }
+
+  @override
   @override
   void dispose() {
     _chewieControllers.forEach((key, controller) {
       controller?.dispose();
     });
-
     _videoControllers.forEach((key, controller) {
       controller?.dispose();
     });
+    globalAudioPlayer.stop();
+    globalAudioPlayer.dispose();
+    _audioRecorder.closeRecorder();
     _socketService.receivemessageoff();
     _messageController.dispose();
     super.dispose();
@@ -699,6 +905,19 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                 ),
+                ElevatedButton(
+                  onPressed: _isRecording ? stopRecording : startRecording,
+                  child:
+                      Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
+                ),
+                if (_recordedAudioPath != null)
+                  ElevatedButton(
+                    onPressed: () {
+                      _sendMessage(
+                          isFile: true, base64Data: null, fileType: 'audio');
+                    },
+                    child: Text('Send Audio'),
+                  ),
                 IconButton(
                   icon: Icon(Icons.send),
                   onPressed: () => _sendMessage(),
@@ -709,5 +928,12 @@ class _ChatPageState extends State<ChatPage> {
         ],
       ),
     );
+  }
+}
+
+class TimestampUtil {
+  static String getCurrentTimestamp() {
+    DateFormat dateFormat = DateFormat('hh:mm a');
+    return dateFormat.format(DateTime.now());
   }
 }

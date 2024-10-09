@@ -3,7 +3,6 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'chatlist.dart';
-import 'db_helper.dart';
 
 class LoginPage extends StatefulWidget {
   @override
@@ -39,7 +38,6 @@ class _LoginPageState extends State<LoginPage> {
         String username = responseData['data'][0]['username'];
         int userId = responseData['data'][0]['userId'];
 
-        // Save the username
         _saveUsername(username);
         Navigator.push(
           context,
